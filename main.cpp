@@ -12,7 +12,20 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
+
+//Get config value
+#include"yaml-cpp/yaml.h"
+
+//camera open
 #include"cameraOpen/include/MvCameraControl.h"
+
+
+//camera detection
+#include "detector/include/armor.hpp"
+#include "detector/include/number_classifier.hpp"
+#include "detector/include/detector.hpp"
+#include "detector/include/pnp_solver.hpp"
+
 
 
 //定义一个相机线程和图片处理线程间通信的数据结构，包含帧和时间戳
@@ -24,13 +37,58 @@ struct FrameData {
 std::queue<FrameData> frameQueue;  // 用于存储带时间戳的帧
 std::mutex mtx;  // 互斥锁，保护共享队列
 std::condition_variable asdf;  // 条件变量，用于线程同步
-
+const size_t MAX_QUEUE_SIZE = 100;//限制队列长度
 bool capturing = true;  // 捕捉标志位
 
 std::string error_message;//打开摄像头时的错误信息
 
+//初始化detector，应用于线程2中
+std::unique_ptr<rm_auto_aim::Detector> initDetector()
+{
+    //设置二值化参数和探测颜色
+    YAML::Node config = YAML::LoadFile("../config.yaml");
+    std::cout << "config.yaml loaded" << std::endl;
+    int binary_thres = config["detector"]["binary_thres"].as<int>();
+    int detect_color = config["detector"]["detect_color"].as<int>();
 
-//线程1：打开相机通过回调函数获取图像
+    //填充light和armor类所需要的参数
+    rm_auto_aim::Detector::LightParams l_params = {
+    
+    .min_ratio =  config["detector"]["light_min_ratio"].as<double>(),
+    .max_ratio =  0.4,
+    .max_angle = 40.0};
+  
+    rm_auto_aim::Detector::ArmorParams a_params = {
+    .min_light_ratio = config["detector"]["armor_min_light_ratio"].as<double>(),
+    .min_small_center_distance = 0.8,
+    .max_small_center_distance = 3.2,
+    .min_large_center_distance = 3.2,
+    .max_large_center_distance = 5.5,
+    .max_angle = 35.0};
+    
+    //初始化detector,创建一个跟踪器
+    auto detector = std::make_unique<rm_auto_aim::Detector>(binary_thres, detect_color, l_params, a_params);
+
+    //初始化数字分类器
+    //设置模型路径和阈值
+    auto pkg_path = config["detector"]["pkg_path"].as<std::string>();
+    auto model_path = pkg_path + "/model/mlp.onnx";
+    auto label_path = pkg_path + "/model/label.txt";
+    double threshold = config["detector"]["classifier_threshold"].as<double>();
+    std::vector<std::string> ignore_classes = 
+    config["detector"]["ignore_classes"].as<std::vector<std::string>>();
+    detector->classifier =
+    std::make_unique<rm_auto_aim::NumberClassifier>(model_path, label_path, threshold, ignore_classes);
+
+    return detector;
+}
+
+
+
+
+
+
+//线程1：打开相机通过回调函数获取图像,下面四个函数为应用到的函数，看看imagecallbackex函数即可，其他三个直接copy的官方文档
     void PressEnterToExit(void)
     {
         int c;
@@ -80,9 +138,11 @@ std::string error_message;//打开摄像头时的错误信息
             
             cv::Mat clonedFrame = imageRGB.clone();
             auto timestamp = std::chrono::system_clock::now();
+            cv::imshow("originalframe" , clonedFrame);
             
             // 将捕捉到的帧和时间戳放入队列
             std::unique_lock<std::mutex> lock(mtx);
+            asdf.wait(lock, []{ return frameQueue.size() < MAX_QUEUE_SIZE; });
             frameQueue.push({clonedFrame, timestamp});
             lock.unlock();
 
@@ -243,6 +303,7 @@ std::string error_message;//打开摄像头时的错误信息
 
 // 线程2：负责处理视频帧
 void processFrames() {
+    std::unique_ptr<rm_auto_aim::Detector>detector_ = initDetector();
     while (capturing) {
         std::unique_lock<std::mutex> lock(mtx);
         asdf.wait(lock, [] { return !frameQueue.empty(); });  // 等待捕捉线程的通知
@@ -251,8 +312,33 @@ void processFrames() {
         FrameData frameData = frameQueue.front();
         frameQueue.pop();
         lock.unlock();
+      
+        // Detector
+        
+        auto armors = detector_->detect(frameData.frame);
+        //计算延迟
+        auto final_time = std::chrono::system_clock::now();
+        auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(final_time - frameData.timestamp).count();
+        
+        // 显示数字
+        if (!armors.empty()) {
+        auto all_num_img = detector_->getAllNumbersImage();
+        cv::imshow("All Numbers", all_num_img);
+        }
+
+        //把装甲板画出来
+        detector_->drawResults(frameData.frame);
+        
+        // Draw latency
+        std::stringstream latency_ss;
+        latency_ss << "Latency: " << std::fixed << std::setprecision(2) << latency << "ms";
+        auto latency_s = latency_ss.str();
+        cv::putText(
+        frameData.frame, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
+        //目标检测结束，进入位姿估计
 
         
+
         
 
         // 显示处理后的帧
@@ -265,6 +351,9 @@ void processFrames() {
         }
     }
 }
+
+
+
 
 int main() {
     // 创建捕捉和处理线程

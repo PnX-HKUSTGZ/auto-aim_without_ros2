@@ -1,0 +1,11 @@
+detector:
+  binary_thres: 80
+  detect_color: 0
+  classifier_threshold: 0.8
+  light_min_ratio: 0.1
+  armor_min_light_ratio: 0.7
+  ignore_classes:
+    - "negative"
+  pkg_path: "/home/pnx/training_code/detector"
+
+  
