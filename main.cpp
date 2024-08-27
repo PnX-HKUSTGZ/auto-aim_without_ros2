@@ -1,3 +1,4 @@
+
 #include <iostream>
 #include <thread>
 #include <queue>
@@ -25,6 +26,8 @@
 #include "detector/include/number_classifier.hpp"
 #include "detector/include/detector.hpp"
 #include "detector/include/pnp_solver.hpp"
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 
 
@@ -335,9 +338,51 @@ void processFrames() {
         auto latency_s = latency_ss.str();
         cv::putText(
         frameData.frame, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
-        //目标检测结束，进入位姿估计
-
         
+        
+        //目标检测结束，进入位姿估计
+        rm_auto_aim::Detector::Armormsg armor_msg;
+        //创建一个位姿估计器
+        std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_;
+
+        if (pnp_solver_ != nullptr) {
+      
+        for (const auto & armor : armors) {
+        cv::Mat rvec, tvec;
+        bool success = pnp_solver_->solvePnP(armor, rvec, tvec);
+        if (success) {
+            // Fill basic info
+            armor_msg.type = rm_auto_aim::ARMOR_TYPE_STR[static_cast<int>(armor.type)];
+            armor_msg.number = armor.number;
+
+            // Fill pose
+            armor_msg.pose.position.x = tvec.at<double>(0);
+            armor_msg.pose.position.y = tvec.at<double>(1);
+            armor_msg.pose.position.z = tvec.at<double>(2);
+            // rvec to 3x3 rotation matrix
+            cv::Mat rotation_matrix;
+            cv::Rodrigues(rvec, rotation_matrix);//将旋转向量转换为旋转矩阵
+            // rotation matrix to quaternion
+            Eigen::Matrix<double, 3, 3> rotationMatrix;
+            rotationMatrix <<
+            rotation_matrix.at<double>(0, 0), rotation_matrix.at<double>(0, 1), rotation_matrix.at<double>(0, 2),
+            rotation_matrix.at<double>(1, 0), rotation_matrix.at<double>(1, 1), rotation_matrix.at<double>(1, 2),
+            rotation_matrix.at<double>(2, 0), rotation_matrix.at<double>(2, 1), rotation_matrix.at<double>(2, 2);
+            Eigen::Quaterniond quaternion(rotationMatrix);
+
+            armor_msg.pose.orientation = quaternion;
+
+            // Fill the distance to image center
+            armor_msg.distance_to_image_center = pnp_solver_->calculateDistanceToCenter(armor.center);
+
+            
+        } 
+        else 
+        {
+            std::cout<<"solvePnP failed"<<std::endl;
+        }
+        }
+    }
 
         
 

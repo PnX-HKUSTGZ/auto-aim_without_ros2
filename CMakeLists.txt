@@ -16,7 +16,7 @@ include_directories(/home/pnx/training_code/cameraOpen/include)
 # 查找OpenCV库和yaml-cpp库
 find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Eigen3 3.3 REQUIRED )
 
 # 添加可执行文件
 add_executable(main main.cpp ${DETECTOR_FILES})
