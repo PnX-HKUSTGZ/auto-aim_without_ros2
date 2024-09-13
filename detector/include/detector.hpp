@@ -16,6 +16,7 @@
 #include "armor.hpp"
 #include "number_classifier.hpp"
 #include <Eigen/Geometry> 
+#include <chrono>
 
 
 namespace rm_auto_aim
@@ -38,14 +39,19 @@ public:
   };
 
 //定义包含装甲板所有信息的结构体，负责位姿估计结束后与状态估计模块的信息交互
-  struct Armormsg
+  
+   struct Armormsg
   {
+    std::chrono::time_point<std::chrono::system_clock> timestamp;
     std::string number;
     std::string type;
     float distance_to_image_center;
     Pose pose;
 
   };
+  
+  
+ 
 
   struct LightParams //灯条选择的限制参数
   {

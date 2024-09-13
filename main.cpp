@@ -20,7 +20,6 @@
 //camera open
 #include"cameraOpen/include/MvCameraControl.h"
 
-
 //camera detection
 #include "detector/include/armor.hpp"
 #include "detector/include/number_classifier.hpp"
@@ -28,7 +27,12 @@
 #include "detector/include/pnp_solver.hpp"
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <vector>
 
+//serialdriver
+#include"rm_serial_driver/include/rm_serial_driver.hpp"
+#include "rm_serial_driver/include/packet.hpp"
+#include "rm_serial_driver/include/crc.hpp"
 
 
 //定义一个相机线程和图片处理线程间通信的数据结构，包含帧和时间戳
@@ -37,19 +41,30 @@ struct FrameData {
     std::chrono::time_point<std::chrono::system_clock> timestamp;
 };
 
+//串口到tracker的数据，云台与世界系之间的坐标变换
+struct transform{
+    std::chrono::time_point<std::chrono::system_clock> timestamp;
+    Eigen::Quaternionf q;
+    bool reset_tracker;
+  };
 std::queue<FrameData> frameQueue;  // 用于存储带时间戳的帧
-std::mutex mtx;  // 互斥锁，保护共享队列
+std::queue<transform> transformQueue;//用于存储云台与世界系之间的坐标变换
+std::mutex mtx;  // 互斥锁，保护共享队列（用于线程1和线程2）
+std::mutex mtx2;//互斥锁，保护共享队列（用于线程3和线程2）
 std::condition_variable asdf;  // 条件变量，用于线程同步
+std::condition_variable asdf2;  // 条件变量，用于线程同步
 const size_t MAX_QUEUE_SIZE = 100;//限制队列长度
 bool capturing = true;  // 捕捉标志位
 
 std::string error_message;//打开摄像头时的错误信息
+rm_serial_driver::RMSerialDriver serialdriver;//创建一个串口驱动器
+
 
 //初始化detector，应用于线程2中
 std::unique_ptr<rm_auto_aim::Detector> initDetector()
 {
     //设置二值化参数和探测颜色
-    YAML::Node config = YAML::LoadFile("../config.yaml");
+    YAML::Node config = YAML::LoadFile("/home/pnx/training_code/config.yaml");
     std::cout << "config.yaml loaded" << std::endl;
     int binary_thres = config["detector"]["binary_thres"].as<int>();
     int detect_color = config["detector"]["detect_color"].as<int>();
@@ -85,10 +100,6 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
 
     return detector;
 }
-
-
-
-
 
 
 //线程1：打开相机通过回调函数获取图像,下面四个函数为应用到的函数，看看imagecallbackex函数即可，其他三个直接copy的官方文档
@@ -141,7 +152,7 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
             
             cv::Mat clonedFrame = imageRGB.clone();
             auto timestamp = std::chrono::system_clock::now();
-            cv::imshow("originalframe" , clonedFrame);
+            
             
             // 将捕捉到的帧和时间戳放入队列
             std::unique_lock<std::mutex> lock(mtx);
@@ -303,11 +314,15 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
     }
 
 
-
+int n = 0;
 // 线程2：负责处理视频帧
 void processFrames() {
     std::unique_ptr<rm_auto_aim::Detector>detector_ = initDetector();
+    //创建一个位姿估计器
+    std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_;
+    std::vector<rm_auto_aim::Detector::Armormsg>armors_msg;//与tracker模块（目标跟踪与状态估计）交互的数据结构，创建在循环外部，防止反复析构增大开销
     while (capturing) {
+    {
         std::unique_lock<std::mutex> lock(mtx);
         asdf.wait(lock, [] { return !frameQueue.empty(); });  // 等待捕捉线程的通知
 
@@ -315,9 +330,9 @@ void processFrames() {
         FrameData frameData = frameQueue.front();
         frameQueue.pop();
         lock.unlock();
-      
-        // Detector
-        
+        //直接显示图像
+        cv::imshow("originFrame", frameData.frame);
+    
         auto armors = detector_->detect(frameData.frame);
         //计算延迟
         auto final_time = std::chrono::system_clock::now();
@@ -341,17 +356,18 @@ void processFrames() {
         
         
         //目标检测结束，进入位姿估计
-        rm_auto_aim::Detector::Armormsg armor_msg;
-        //创建一个位姿估计器
-        std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_;
+        
 
+        armors_msg.clear();//把上一次的数据清空
+        rm_auto_aim::Detector::Armormsg armor_msg;
         if (pnp_solver_ != nullptr) {
-      
+        
         for (const auto & armor : armors) {
         cv::Mat rvec, tvec;
         bool success = pnp_solver_->solvePnP(armor, rvec, tvec);
         if (success) {
             // Fill basic info
+            armor_msg.timestamp = frameData.timestamp;
             armor_msg.type = rm_auto_aim::ARMOR_TYPE_STR[static_cast<int>(armor.type)];
             armor_msg.number = armor.number;
 
@@ -371,10 +387,11 @@ void processFrames() {
             Eigen::Quaterniond quaternion(rotationMatrix);
 
             armor_msg.pose.orientation = quaternion;
-
+            
             // Fill the distance to image center
             armor_msg.distance_to_image_center = pnp_solver_->calculateDistanceToCenter(armor.center);
-
+            
+            armors_msg.push_back(armor_msg);
             
         } 
         else 
@@ -383,11 +400,39 @@ void processFrames() {
         }
         }
     }
+    }
+    {
+    //位姿估计结束，进入目标追踪与状态估计（tracker模块）
+
+
+    //从串口获取云台位姿（线程间通信）
+    std::unique_lock<std::mutex> lock(mtx2);
+    asdf2.wait(lock, [] { return !transformQueue.empty(); });  // 等待捕捉线程的通知
+    
+    // 从队列中取出一帧进行处理
+    transform t = transformQueue.front();
+    transformQueue.pop();
+    lock.unlock();
+    //输出四元数的四个值
+    std::cout<<"Received transform data at "<<std::chrono::duration_cast<std::chrono::milliseconds>(t.timestamp.time_since_epoch()).count()<<"ms"<<std::endl;
+    std::cout<<"q:"<<t.q.x()<<" "<<t.q.y()<<" "<<t.q.z()<<" "<<t.q.w()<<std::endl;
+    n++;
+    std::cout<<"n:"<<n<<std::endl;
+    //输出armors.msg的信息
+    for (const auto & armor_msg : armors_msg) {
+    std::cout<<"Armor type: "<<armor_msg.type<<std::endl;
+    std::cout<<"Armor number: "<<armor_msg.number<<std::endl;
+    std::cout<<"Armor position: "<<armor_msg.pose.position.x<<" "<<armor_msg.pose.position.y<<" "<<armor_msg.pose.position.z<<std::endl;
+    std::cout<<"Armor orientation: "<<armor_msg.pose.orientation.x()<<" "<<armor_msg.pose.orientation.y()<<" "<<armor_msg.pose.orientation.z()<<" "<<armor_msg.pose.orientation.w()<<std::endl;
+    std::cout<<"Distance to image center: "<<armor_msg.distance_to_image_center<<std::endl;
+    }
+
+
+    
+    }   
 
         
-
-        // 显示处理后的帧
-        cv::imshow("Processed Frame with Timestamp", frameData.frame);
+        
 
         // 按下'q'键退出
         if (cv::waitKey(1) == 'q') {
@@ -397,6 +442,67 @@ void processFrames() {
     }
 }
 
+// 线程3：接收串口数据
+void receiveData()
+{
+    std::vector<uint8_t> header(1);
+  std::vector<uint8_t> data;
+  data.reserve(sizeof(rm_serial_driver::ReceivePacket));
+
+  while (true) {
+    try {
+      serialdriver.serial_driver_->port()->receive(header);
+
+      if (header[0] == 0x5A) {
+        data.resize(sizeof(rm_serial_driver::ReceivePacket) - 1);
+        serialdriver.serial_driver_->port()->receive(data);
+
+        data.insert(data.begin(), header[0]);
+        rm_serial_driver::ReceivePacket packet = rm_serial_driver::fromVector(data);
+        //crc校验
+        bool crc_ok =
+          crc16::Verify_CRC16_Check_Sum(reinterpret_cast<const uint8_t *>(&packet), sizeof(packet));
+        if (crc_ok) {
+          if (!serialdriver.initial_set_param_ || packet.detect_color != serialdriver.previous_receive_color_) {
+            YAML::Node config = YAML::LoadFile("/home/pnx/training_code/config.yaml");
+            config["detector"]["detect_color"] = packet.detect_color;//对颜色参数进行更改
+            serialdriver.previous_receive_color_ = packet.detect_color;
+          }
+
+          // 发送世界系到云台系的变换数据到tracker
+          transform t;
+          YAML::Node config = YAML::LoadFile("/home/pnx/training_code/config.yaml");
+          serialdriver.timestamp_offset_ = config["serialdriver"]["timestamp_offset"].as<double>();
+          t.timestamp = std::chrono::system_clock::now() + 
+              std::chrono::duration_cast<std::chrono::system_clock::duration>(std::chrono::duration<double>(serialdriver.timestamp_offset_));
+          
+          //给t.q四元数赋值
+          t.q = Eigen::Quaternionf(packet.q[0], packet.q[1], packet.q[2], packet.q[3]);
+          //给t.reset_tracker赋值,是否要重置追踪器
+          t.reset_tracker = packet.reset_tracker;
+
+          //放入队列
+          std::unique_lock<std::mutex> lock(mtx2);
+          asdf2.wait(lock, []{ return transformQueue.size() < MAX_QUEUE_SIZE; });
+          transformQueue.push(t);
+          lock.unlock();
+
+          // 通知处理线程
+          asdf2.notify_one();
+
+          
+        } else {
+          std::cerr<<"CRC error!";
+        }
+      } else {
+        std::cerr<<"Header error!";
+      }
+    } catch (const std::exception & ex) {
+      std::cerr<< "Error while receiving data: %s", ex.what();
+      serialdriver.reopenPort();
+    }
+  }
+}
 
 
 
@@ -404,10 +510,13 @@ int main() {
     // 创建捕捉和处理线程
     std::thread captureThread(videoGet);
     std::thread processThread(processFrames);
+    std::thread receiveThread(receiveData);
+
 
     // 等待线程结束
     captureThread.join();
     processThread.join();
+    receiveThread.join();
 
     return 0;
 }

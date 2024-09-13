@@ -7,5 +7,12 @@ detector:
   ignore_classes:
     - "negative"
   pkg_path: "/home/pnx/training_code/detector"
+serialdriver:
+  timestamp_offset: 0.006
+  device_name: /dev/ttyACM0
+  baud_rate: 115200
+  flow_control: none
+  parity: none
+  stop_bits: "1"
 
   
