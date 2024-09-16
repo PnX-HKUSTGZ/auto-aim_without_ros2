@@ -53,7 +53,7 @@ std::mutex mtx;  // 互斥锁，保护共享队列（用于线程1和线程2）
 std::mutex mtx2;//互斥锁，保护共享队列（用于线程3和线程2）
 std::condition_variable asdf;  // 条件变量，用于线程同步
 std::condition_variable asdf2;  // 条件变量，用于线程同步
-const size_t MAX_QUEUE_SIZE = 100;//限制队列长度
+const size_t MAX_QUEUE_SIZE = 1;//限制队列长度
 bool capturing = true;  // 捕捉标志位
 
 std::string error_message;//打开摄像头时的错误信息
@@ -318,7 +318,7 @@ int n = 0;
 // 线程2：负责处理视频帧
 void processFrames() {
     std::unique_ptr<rm_auto_aim::Detector>detector_ = initDetector();
-    //创建一个位姿估计器
+    //获取相机内参和畸变系数
     YAML::Node config = YAML::LoadFile("/home/pnx/training_code/config.yaml");
     std::array<double,9> camera_matrix_data;
     int i = 0;
@@ -328,17 +328,18 @@ void processFrames() {
             i++;
         }
     }
-
+    
     std::vector<double> dist_coeffs_data;
     for (const auto& element : config["detector"]["dist_coeff"]) {
         dist_coeffs_data.push_back(element.as<double>());
         }
-
+    //获取完相机参数后初始化位姿估计器
     std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_ = 
     std::make_unique<rm_auto_aim::PnPSolver>(camera_matrix_data, dist_coeffs_data);
 
     std::vector<rm_auto_aim::Detector::Armormsg>armors_msg;//与tracker模块（目标跟踪与状态估计）交互的数据结构，创建在循环外部，防止反复析构增大开销
     rm_auto_aim::Detector::Armormsg armor_msg;
+
     while (capturing) {
     {
         std::unique_lock<std::mutex> lock(mtx);
@@ -349,14 +350,24 @@ void processFrames() {
         frameQueue.pop();
         lock.unlock();
         asdf.notify_one();
+        auto transmit_time = std::chrono::system_clock::now();
+        auto transmit_latency = std::chrono::duration_cast<std::chrono::milliseconds>(transmit_time - frameData.timestamp).count();
+        std::cout<<"transmit latency:"<<transmit_latency<<std::endl;
+
         //直接显示图像
         cv::imshow("originFrame", frameData.frame);
-    
+        
+        auto startprocesstime = std::chrono::system_clock::now();
+
         auto armors = detector_->detect(frameData.frame);
         //计算延迟
         auto final_time = std::chrono::system_clock::now();
         auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(final_time - frameData.timestamp).count();
         
+        auto endprocesstime = std::chrono::system_clock::now();
+        auto process_time = std::chrono::duration_cast<std::chrono::milliseconds>(endprocesstime - startprocesstime).count();
+       
+        std::cout<<"process time:"<<process_time<<std::endl;
         // 显示数字
         if (!armors.empty()) {
         auto all_num_img = detector_->getAllNumbersImage();
@@ -385,7 +396,7 @@ void processFrames() {
         cv::Mat rvec, tvec;
         bool success = pnp_solver_->solvePnP(armor, rvec, tvec);
         if (success) {
-            std::cout<<"solvePnP success"<<std::endl;
+            
             // Fill basic info
             armor_msg.timestamp = frameData.timestamp;
             armor_msg.type = rm_auto_aim::ARMOR_TYPE_STR[static_cast<int>(armor.type)];
@@ -444,7 +455,10 @@ void processFrames() {
     /* std::cout<<"Received transform data at "<<std::chrono::duration_cast<std::chrono::milliseconds>(t.timestamp.time_since_epoch()).count()<<"ms"<<std::endl;
     std::cout<<"q:"<<t.q.x()<<" "<<t.q.y()<<" "<<t.q.z()<<" "<<t.q.w()<<std::endl; */
     
-    
+    auto serial_transmit_time = std::chrono::system_clock::now();
+    auto serial_transmit_latency = std::chrono::duration_cast<std::chrono::milliseconds>(serial_transmit_time - t.timestamp).count();
+    std::cout<<"serial transmit latency:"<<serial_transmit_latency<<std::endl;
+
     if(armors_msg.empty())
     {
         std::cout<<"No armor detected"<<std::endl;
@@ -453,14 +467,8 @@ void processFrames() {
     {
         std::cout<<"Detected armors:"<<std::endl;
     }
-    //输出armors.msg的信息
-    for (const auto & armor_msg : armors_msg) {
-    std::cout<<"Armor type: "<<armor_msg.type<<std::endl;
-    std::cout<<"Armor number: "<<armor_msg.number<<std::endl;
-    std::cout<<"Armor position: "<<armor_msg.pose.position.x<<" "<<armor_msg.pose.position.y<<" "<<armor_msg.pose.position.z<<std::endl;
-    std::cout<<"Armor orientation: "<<armor_msg.pose.orientation.x()<<" "<<armor_msg.pose.orientation.y()<<" "<<armor_msg.pose.orientation.z()<<" "<<armor_msg.pose.orientation.w()<<std::endl;
-    std::cout<<"Distance to image center: "<<armor_msg.distance_to_image_center<<std::endl;
-    }
+  
+    
 
 
     
@@ -474,7 +482,12 @@ void processFrames() {
             capturing = false;
             break;
         }
+    auto end_time = std::chrono::system_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - frameData.timestamp).count();
+    std::cout<<"Total duration:"<<duration<<std::endl;
     }
+    
+    
 }
 
 // 线程3：接收串口数据
@@ -543,7 +556,7 @@ int main() {
     // 创建捕捉和处理线程
     std::thread captureThread(videoGet);
     std::thread receiveThread(receiveData);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    //std::this_thread::sleep_for(std::chrono::milliseconds(1));
     std::thread processThread(processFrames);
 
     // 等待线程结束
