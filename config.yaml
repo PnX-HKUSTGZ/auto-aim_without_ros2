@@ -7,6 +7,12 @@ detector:
   ignore_classes:
     - "negative"
   pkg_path: "/home/pnx/training_code/detector"
+  camera_matrix:
+  - [1807.12121, 0.0, 711.11997]
+  - [0.0, 1806.46896, 562.49495]
+  - [0.0, 0.0, 1.0]
+  dist_coeff: [-0.078049, 0.158627, 0.000304, -0.000566, 0.000000]
+
 serialdriver:
   timestamp_offset: 0.006
   device_name: /dev/ttyACM0

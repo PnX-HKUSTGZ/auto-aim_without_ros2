@@ -68,7 +68,7 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
     std::cout << "config.yaml loaded" << std::endl;
     int binary_thres = config["detector"]["binary_thres"].as<int>();
     int detect_color = config["detector"]["detect_color"].as<int>();
-
+    
     //填充light和armor类所需要的参数
     rm_auto_aim::Detector::LightParams l_params = {
     
@@ -319,8 +319,26 @@ int n = 0;
 void processFrames() {
     std::unique_ptr<rm_auto_aim::Detector>detector_ = initDetector();
     //创建一个位姿估计器
-    std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_;
+    YAML::Node config = YAML::LoadFile("/home/pnx/training_code/config.yaml");
+    std::array<double,9> camera_matrix_data;
+    int i = 0;
+    for (const auto& row : config["detector"]["camera_matrix"]) {
+        for (const auto& element : row) {
+            camera_matrix_data[i] = element.as<double>();
+            i++;
+        }
+    }
+
+    std::vector<double> dist_coeffs_data;
+    for (const auto& element : config["detector"]["dist_coeff"]) {
+        dist_coeffs_data.push_back(element.as<double>());
+        }
+
+    std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_ = 
+    std::make_unique<rm_auto_aim::PnPSolver>(camera_matrix_data, dist_coeffs_data);
+
     std::vector<rm_auto_aim::Detector::Armormsg>armors_msg;//与tracker模块（目标跟踪与状态估计）交互的数据结构，创建在循环外部，防止反复析构增大开销
+    rm_auto_aim::Detector::Armormsg armor_msg;
     while (capturing) {
     {
         std::unique_lock<std::mutex> lock(mtx);
@@ -330,6 +348,7 @@ void processFrames() {
         FrameData frameData = frameQueue.front();
         frameQueue.pop();
         lock.unlock();
+        asdf.notify_one();
         //直接显示图像
         cv::imshow("originFrame", frameData.frame);
     
@@ -353,19 +372,20 @@ void processFrames() {
         auto latency_s = latency_ss.str();
         cv::putText(
         frameData.frame, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
-        
-        
+         
+        cv::imshow("Result", frameData.frame);
         //目标检测结束，进入位姿估计
         
 
         armors_msg.clear();//把上一次的数据清空
-        rm_auto_aim::Detector::Armormsg armor_msg;
+        
         if (pnp_solver_ != nullptr) {
         
         for (const auto & armor : armors) {
         cv::Mat rvec, tvec;
         bool success = pnp_solver_->solvePnP(armor, rvec, tvec);
         if (success) {
+            std::cout<<"solvePnP success"<<std::endl;
             // Fill basic info
             armor_msg.timestamp = frameData.timestamp;
             armor_msg.type = rm_auto_aim::ARMOR_TYPE_STR[static_cast<int>(armor.type)];
@@ -388,11 +408,13 @@ void processFrames() {
 
             armor_msg.pose.orientation = quaternion;
             
+            
+            
             // Fill the distance to image center
             armor_msg.distance_to_image_center = pnp_solver_->calculateDistanceToCenter(armor.center);
             
-            armors_msg.push_back(armor_msg);
             
+            armors_msg.push_back(armor_msg);
         } 
         else 
         {
@@ -400,6 +422,9 @@ void processFrames() {
         }
         }
     }
+        else{
+            std::cout<<"pnp_solver_ is nullptr"<<std::endl;}
+    
     }
     {
     //位姿估计结束，进入目标追踪与状态估计（tracker模块）
@@ -413,11 +438,21 @@ void processFrames() {
     transform t = transformQueue.front();
     transformQueue.pop();
     lock.unlock();
+    asdf2.notify_one();
+
     //输出四元数的四个值
-    std::cout<<"Received transform data at "<<std::chrono::duration_cast<std::chrono::milliseconds>(t.timestamp.time_since_epoch()).count()<<"ms"<<std::endl;
-    std::cout<<"q:"<<t.q.x()<<" "<<t.q.y()<<" "<<t.q.z()<<" "<<t.q.w()<<std::endl;
-    n++;
-    std::cout<<"n:"<<n<<std::endl;
+    /* std::cout<<"Received transform data at "<<std::chrono::duration_cast<std::chrono::milliseconds>(t.timestamp.time_since_epoch()).count()<<"ms"<<std::endl;
+    std::cout<<"q:"<<t.q.x()<<" "<<t.q.y()<<" "<<t.q.z()<<" "<<t.q.w()<<std::endl; */
+    
+    
+    if(armors_msg.empty())
+    {
+        std::cout<<"No armor detected"<<std::endl;
+    }
+    else
+    {
+        std::cout<<"Detected armors:"<<std::endl;
+    }
     //输出armors.msg的信息
     for (const auto & armor_msg : armors_msg) {
     std::cout<<"Armor type: "<<armor_msg.type<<std::endl;
@@ -485,8 +520,6 @@ void receiveData()
           std::unique_lock<std::mutex> lock(mtx2);
           asdf2.wait(lock, []{ return transformQueue.size() < MAX_QUEUE_SIZE; });
           transformQueue.push(t);
-          lock.unlock();
-
           // 通知处理线程
           asdf2.notify_one();
 
@@ -509,9 +542,9 @@ void receiveData()
 int main() {
     // 创建捕捉和处理线程
     std::thread captureThread(videoGet);
-    std::thread processThread(processFrames);
     std::thread receiveThread(receiveData);
-
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::thread processThread(processFrames);
 
     // 等待线程结束
     captureThread.join();
