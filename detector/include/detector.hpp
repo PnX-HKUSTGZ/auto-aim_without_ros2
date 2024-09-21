@@ -9,7 +9,7 @@
 #include <opencv2/core/types.hpp>
 
 // STD
-#include <cmath>
+
 #include <string>
 #include <vector>
 

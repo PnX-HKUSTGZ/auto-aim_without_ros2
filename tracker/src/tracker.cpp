@@ -2,13 +2,8 @@
 
 #include "../include/tracker.hpp"
 
-#include <angles/angles.h>
-#include <tf2/LinearMath/Matrix3x3.h>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/convert.h>
-
-#include <rclcpp/logger.hpp>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 // STD
 #include <cfloat>
@@ -31,16 +26,16 @@ Tracker::Tracker(double max_match_distance, double max_match_yaw_diff)
 {
 }
 //初始化追踪器
-void Tracker::init(const Armors::SharedPtr & armors_msg)
+void Tracker::init(const Armors & armors_msg)
 {
-  if (armors_msg->armors.empty()) {
+  if (armors_msg.empty()) {
     return;
   }
 
   // Simply choose the armor that is closest to image center
   double min_distance = DBL_MAX;
-  tracked_armor = armors_msg->armors[0];//基于输入的装甲板消息选择最接近图像中心的装甲板作为追踪目标
-  for (const auto & armor : armors_msg->armors) {
+  tracked_armor = armors_msg[0];//基于输入的装甲板消息选择最接近图像中心的装甲板作为追踪目标
+  for (const auto & armor : armors_msg) {
     if (armor.distance_to_image_center < min_distance) {
       min_distance = armor.distance_to_image_center;
       tracked_armor = armor;
@@ -48,7 +43,7 @@ void Tracker::init(const Armors::SharedPtr & armors_msg)
   }
 
   initEKF(tracked_armor);//中心的装甲板作为追踪目标，并初始化EKF
-  RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "Init EKF!");
+  
 
   tracked_id = tracked_armor.number;
   tracker_state = DETECTING;//将追踪状态设为detecting
@@ -56,25 +51,24 @@ void Tracker::init(const Armors::SharedPtr & armors_msg)
   updateArmorsNum(tracked_armor);//对追踪的装甲板进行分类？
 }
 
-void Tracker::update(const Armors::SharedPtr & armors_msg)
+void Tracker::update(const Armors & armors_msg)
 //根据经过EKF加权后的观测和预测来更新装甲板的追踪状态
 {
   // KF predict
   Eigen::VectorXd ekf_prediction = ekf.predict();//
-  RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF predict");
 
   bool matched = false;
   // Use KF prediction as default target state if no matched armor is found
   target_state = ekf_prediction;
 
-  if (!armors_msg->armors.empty()) {
+  if (!armors_msg.empty()) {
     // Find the closest armor with the same id
     Armor same_id_armor;
     int same_id_armors_count = 0;
     auto predicted_position = getArmorPositionFromState(ekf_prediction);//预测
     double min_position_diff = DBL_MAX;
     double yaw_diff = DBL_MAX;//导入差值上限
-    for (const auto & armor : armors_msg->armors) {//遍历所有观测到的装甲板
+    for (const auto & armor : armors_msg) {//遍历所有观测到的装甲板
       // Only consider armors with the same id
       if (armor.number == tracked_id) {
         same_id_armor = armor;
@@ -106,14 +100,14 @@ void Tracker::update(const Armors::SharedPtr & armors_msg)
       //四元数方向转换为偏航角
       measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
       target_state = ekf.update(measurement);
-      RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF update");
+      //RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF update");
     } else if (same_id_armors_count == 1 && yaw_diff > max_match_yaw_diff_) {
       // Matched armor not found, but there is only one armor with the same id
       // and yaw has jumped, take this case as the target is spinning and armor jumped
       handleArmorJump(same_id_armor);//处理装甲板跳变
     } else {
       // No matched armor found
-      RCLCPP_WARN(rclcpp::get_logger("armor_tracker"), "No matched armor found!");
+      //RCLCPP_WARN(rclcpp::get_logger("armor_tracker"), "No matched armor found!");
     }
   }
 
@@ -198,7 +192,7 @@ void Tracker::handleArmorJump(const Armor & current_armor)
     target_state(4) = current_armor.pose.position.z;
     std::swap(target_state(8), another_r);
   }
-  RCLCPP_WARN(rclcpp::get_logger("armor_tracker"), "Armor jump!");
+  std::cout<<"Armor jump"<<std::endl;
 
   // If position difference is larger than max_match_distance_,
   // take this case as the ekf diverged, reset the state
@@ -213,24 +207,34 @@ void Tracker::handleArmorJump(const Armor & current_armor)
     target_state(3) = 0;                   // vyc
     target_state(4) = p.z;                 // za
     target_state(5) = 0;                   // vza
-    RCLCPP_ERROR(rclcpp::get_logger("armor_tracker"), "Reset State!");
+    std::cout<<"Reset State!"<<std::endl;
   }
 
   ekf.setState(target_state);
   
 }
 
-double Tracker::orientationToYaw(const geometry_msgs::msg::Quaternion & q)//将四元数转换为偏航角
-{
-  // Get armor yaw
-  tf2::Quaternion tf_q;
-  tf2::fromMsg(q, tf_q);
-  double roll, pitch, yaw;
-  tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
-  // Make yaw change continuous (-pi~pi to -inf~inf)
-  yaw = last_yaw_ + angles::shortest_angular_distance(last_yaw_, yaw);
-  last_yaw_ = yaw;
-  return yaw;
+double Tracker::orientationToYaw(const Eigen::Quaterniond &q) {
+    // Convert quaternion to rotation matrix
+    Eigen::Matrix3d rotationMatrix = q.toRotationMatrix();
+
+    // Extract roll, pitch, and yaw from the rotation matrix
+    double roll, pitch, yaw;
+    pitch = std::asin(-rotationMatrix(2, 0));  // -asin(r31)
+    
+    if (std::abs(rotationMatrix(2, 0)) < 0.99999) {  // Not at a singularity
+        roll = std::atan2(rotationMatrix(2, 1), rotationMatrix(2, 2));  // atan2(r32, r33)
+        yaw = std::atan2(rotationMatrix(1, 0), rotationMatrix(0, 0));   // atan2(r21, r11)
+    } else {  // Gimbal lock case
+        roll = 0;
+        yaw = std::atan2(-rotationMatrix(0, 1), rotationMatrix(1, 1));  // atan2(-r12, r22)
+    }
+
+    // Make yaw change continuous (-pi to pi to -inf to inf)
+    yaw = last_yaw_ + std::atan2(std::sin(yaw - last_yaw_), std::cos(yaw - last_yaw_));
+    last_yaw_ = yaw;
+
+    return yaw;
 }
 
 Eigen::Vector3d Tracker::getArmorPositionFromState(const Eigen::VectorXd & x)//从EKF的状态向量计算装甲板的预测位置。

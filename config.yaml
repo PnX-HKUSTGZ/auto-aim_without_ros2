@@ -21,4 +21,20 @@ serialdriver:
   parity: none
   stop_bits: "1"
 
+tracker:
+  max_armor_distance: 10.0
+  max_match_distance: 0.15
+  max_match_yaw_diff: 1.0
+  tracking_thres: 5
+  lost_time_thres: 0.3
+  gimbal2camera: [0.0, 0.0, 0.0]
+
+ekf:
+  sigma2_q_xyz: 20.0
+  sigma2_q_yaw: 100.0
+  sigma2_q_r: 800.0
+  r_xyz_factor: 0.05
+  r_yaw: 0.02
+  
+
   

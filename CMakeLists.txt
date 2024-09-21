@@ -12,12 +12,14 @@ set(CMAKE_BUILD_TYPE "Debug")
 file(GLOB_RECURSE DETECTOR_FILES 
     ${PROJECT_SOURCE_DIR}/detector/src/*.cpp
     ${PROJECT_SOURCE_DIR}/rm_serial_driver/src/*.cpp
+    ${PROJECT_SOURCE_DIR}/tracker/src/*.cpp
     )
 
 # 包含头文件目录
 include_directories(${PROJECT_SOURCE_DIR}/cameraOpen/include)
 include_directories(${PROJECT_SOURCE_DIR}/detector/include)
 include_directories(${PROJECT_SOURCE_DIR}/rm_serial_driver/include)
+include_directories(${PROJECT_SOURCE_DIR}/tracker/include)
 
 # 查找OpenCV库和yaml-cpp库
 find_package(OpenCV REQUIRED)

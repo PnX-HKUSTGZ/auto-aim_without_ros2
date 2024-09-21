@@ -29,6 +29,9 @@
 #include <Eigen/Geometry>
 #include <vector>
 
+//tracker
+#include "tracker/include/tracker_node.hpp"
+
 //serialdriver
 #include"rm_serial_driver/include/rm_serial_driver.hpp"
 #include "rm_serial_driver/include/packet.hpp"
@@ -37,7 +40,7 @@
 
 //定义一个相机线程和图片处理线程间通信的数据结构，包含帧和时间戳
 struct FrameData {
-    cv::Mat frame;
+    std::shared_ptr<cv::Mat> frame;
     std::chrono::time_point<std::chrono::system_clock> timestamp;
 };
 
@@ -84,7 +87,7 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
     .max_large_center_distance = 5.5,
     .max_angle = 35.0};
     
-    //初始化detector,创建一个跟踪器
+    //初始化detector
     auto detector = std::make_unique<rm_auto_aim::Detector>(binary_thres, detect_color, l_params, a_params);
 
     //初始化数字分类器
@@ -150,14 +153,15 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
             cv::Mat imageRGB;
             cv::cvtColor(mat, imageRGB, cv::COLOR_BayerRG2RGB);
             
-            cv::Mat clonedFrame = imageRGB.clone();
+            std::shared_ptr<cv::Mat> imgPtr = std::make_shared<cv::Mat>(imageRGB);
+            
             auto timestamp = std::chrono::system_clock::now();
             
             
             // 将捕捉到的帧和时间戳放入队列
             std::unique_lock<std::mutex> lock(mtx);
             asdf.wait(lock, []{ return frameQueue.size() < MAX_QUEUE_SIZE; });
-            frameQueue.push({clonedFrame, timestamp});
+            frameQueue.push({imgPtr, timestamp});
             lock.unlock();
 
             // 通知处理线程
@@ -340,6 +344,11 @@ void processFrames() {
     std::vector<rm_auto_aim::Detector::Armormsg>armors_msg;//与tracker模块（目标跟踪与状态估计）交互的数据结构，创建在循环外部，防止反复析构增大开销
     rm_auto_aim::Detector::Armormsg armor_msg;
 
+    rm_auto_aim::ArmorTracker tracker;//创建跟踪类的实例
+
+    //tracker模块得到的目标信息
+    rm_auto_aim::ArmorTracker::Target target_msg;
+
     while (capturing) {
     {
         std::unique_lock<std::mutex> lock(mtx);
@@ -354,12 +363,19 @@ void processFrames() {
         auto transmit_latency = std::chrono::duration_cast<std::chrono::milliseconds>(transmit_time - frameData.timestamp).count();
         std::cout<<"transmit latency:"<<transmit_latency<<std::endl;
 
-        //直接显示图像
-        cv::imshow("originFrame", frameData.frame);
+        if (frameData.frame->empty()) {
+        std::cout << "Error: Could not load image!" << std::endl;
         
+        }
+        cv::imshow("originFrame", *frameData.frame);
+
+        if (cv::getWindowProperty("originFrame", cv::WND_PROP_VISIBLE) < 1) {
+        std::cerr << "Error: Window not created or not visible!" << std::endl;
+        
+        }
         auto startprocesstime = std::chrono::system_clock::now();
 
-        auto armors = detector_->detect(frameData.frame);
+        auto armors = detector_->detect(*frameData.frame);
         //计算延迟
         auto final_time = std::chrono::system_clock::now();
         auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(final_time - frameData.timestamp).count();
@@ -375,16 +391,16 @@ void processFrames() {
         }
 
         //把装甲板画出来
-        detector_->drawResults(frameData.frame);
+        detector_->drawResults(*frameData.frame);
         
         // Draw latency
         std::stringstream latency_ss;
         latency_ss << "Latency: " << std::fixed << std::setprecision(2) << latency << "ms";
         auto latency_s = latency_ss.str();
         cv::putText(
-        frameData.frame, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
+        *frameData.frame, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
          
-        cv::imshow("Result", frameData.frame);
+        cv::imshow("Result", *frameData.frame);
         //目标检测结束，进入位姿估计
         
 
@@ -392,55 +408,53 @@ void processFrames() {
         
         if (pnp_solver_ != nullptr) {
         
-        for (const auto & armor : armors) {
-        cv::Mat rvec, tvec;
-        bool success = pnp_solver_->solvePnP(armor, rvec, tvec);
-        if (success) {
-            
-            // Fill basic info
-            armor_msg.timestamp = frameData.timestamp;
-            armor_msg.type = rm_auto_aim::ARMOR_TYPE_STR[static_cast<int>(armor.type)];
-            armor_msg.number = armor.number;
+            for (const auto & armor : armors) {
+            cv::Mat rvec, tvec;
+            bool success = pnp_solver_->solvePnP(armor, rvec, tvec);
+                if (success) {
+                    
+                    // Fill basic info
+                    armor_msg.timestamp = frameData.timestamp;
+                    armor_msg.type = rm_auto_aim::ARMOR_TYPE_STR[static_cast<int>(armor.type)];
+                    armor_msg.number = armor.number;
 
-            // Fill pose
-            armor_msg.pose.position.x = tvec.at<double>(0);
-            armor_msg.pose.position.y = tvec.at<double>(1);
-            armor_msg.pose.position.z = tvec.at<double>(2);
-            // rvec to 3x3 rotation matrix
-            cv::Mat rotation_matrix;
-            cv::Rodrigues(rvec, rotation_matrix);//将旋转向量转换为旋转矩阵
-            // rotation matrix to quaternion
-            Eigen::Matrix<double, 3, 3> rotationMatrix;
-            rotationMatrix <<
-            rotation_matrix.at<double>(0, 0), rotation_matrix.at<double>(0, 1), rotation_matrix.at<double>(0, 2),
-            rotation_matrix.at<double>(1, 0), rotation_matrix.at<double>(1, 1), rotation_matrix.at<double>(1, 2),
-            rotation_matrix.at<double>(2, 0), rotation_matrix.at<double>(2, 1), rotation_matrix.at<double>(2, 2);
-            Eigen::Quaterniond quaternion(rotationMatrix);
+                    // Fill pose
+                    armor_msg.pose.position.x = tvec.at<double>(0);
+                    armor_msg.pose.position.y = tvec.at<double>(1);
+                    armor_msg.pose.position.z = tvec.at<double>(2);
+                    // rvec to 3x3 rotation matrix
+                    cv::Mat rotation_matrix;
+                    cv::Rodrigues(rvec, rotation_matrix);//将旋转向量转换为旋转矩阵
+                    // rotation matrix to quaternion
+                    Eigen::Matrix<double, 3, 3> rotationMatrix;
+                    rotationMatrix <<
+                    rotation_matrix.at<double>(0, 0), rotation_matrix.at<double>(0, 1), rotation_matrix.at<double>(0, 2),
+                    rotation_matrix.at<double>(1, 0), rotation_matrix.at<double>(1, 1), rotation_matrix.at<double>(1, 2),
+                    rotation_matrix.at<double>(2, 0), rotation_matrix.at<double>(2, 1), rotation_matrix.at<double>(2, 2);
+                    Eigen::Quaterniond quaternion(rotationMatrix);
 
-            armor_msg.pose.orientation = quaternion;
-            
-            
-            
-            // Fill the distance to image center
-            armor_msg.distance_to_image_center = pnp_solver_->calculateDistanceToCenter(armor.center);
-            
-            
-            armors_msg.push_back(armor_msg);
-        } 
-        else 
-        {
-            std::cout<<"solvePnP failed"<<std::endl;
+                    armor_msg.pose.orientation = quaternion;
+                    
+                    // Fill the distance to image center
+                    armor_msg.distance_to_image_center = pnp_solver_->calculateDistanceToCenter(armor.center);
+                    
+                    
+                    armors_msg.push_back(armor_msg);
+                    } 
+                else 
+                    {
+                    std::cout<<"solvePnP failed"<<std::endl;
+                    }
+            }
         }
-        }
-    }
         else{
             std::cout<<"pnp_solver_ is nullptr"<<std::endl;}
     
     }
-    {
+    
     //位姿估计结束，进入目标追踪与状态估计（tracker模块）
 
-
+    {
     //从串口获取云台位姿（线程间通信）
     std::unique_lock<std::mutex> lock(mtx2);
     asdf2.wait(lock, [] { return !transformQueue.empty(); });  // 等待捕捉线程的通知
@@ -450,41 +464,115 @@ void processFrames() {
     transformQueue.pop();
     lock.unlock();
     asdf2.notify_one();
-
-    //输出四元数的四个值
-    /* std::cout<<"Received transform data at "<<std::chrono::duration_cast<std::chrono::milliseconds>(t.timestamp.time_since_epoch()).count()<<"ms"<<std::endl;
-    std::cout<<"q:"<<t.q.x()<<" "<<t.q.y()<<" "<<t.q.z()<<" "<<t.q.w()<<std::endl; */
     
-    auto serial_transmit_time = std::chrono::system_clock::now();
-    auto serial_transmit_latency = std::chrono::duration_cast<std::chrono::milliseconds>(serial_transmit_time - t.timestamp).count();
-    std::cout<<"serial transmit latency:"<<serial_transmit_latency<<std::endl;
 
-    if(armors_msg.empty())
-    {
-        std::cout<<"No armor detected"<<std::endl;
+    if(!armors_msg.empty()){
+        // 计算逆四元数
+        Eigen::Quaterniond q = t.q.cast<double>();//浮点数转成双精度
+
+        
+        //把相机系转化到世界系
+        for (auto & armor : armors_msg) {
+            rm_auto_aim::Detector::Pose ps;
+            ps = armor.pose;
+            
+            ps.position.x =  + armor.pose.position.x;
+            ps.position.y = tracker.gimbal2camra[1] + armor.pose.position.y;
+            ps.position.z = tracker.gimbal2camra[2] + armor.pose.position.z;
+            Eigen::Vector3d v(ps.position.x + tracker.gimbal2camra[0], tracker.gimbal2camra[1] + ps.position.y, tracker.gimbal2camra[2] + ps.position.z);
+            Eigen::Vector3d v_rotated = q * v;
+            armor.pose.position.x = v_rotated[0];
+            armor.pose.position.y = v_rotated[1];
+            armor.pose.position.z = v_rotated[2];
+
+            armor.pose.orientation = q * armor.pose.orientation;}
+
+        // Filter abnormal armors
+        armors_msg.erase(
+        std::remove_if(
+        armors_msg.begin(), armors_msg.end(),
+        [&tracker](const rm_auto_aim::Detector::Armormsg & armor) {
+            return abs(armor.pose.position.z) > 1.2 ||
+                Eigen::Vector2d(armor.pose.position.x, armor.pose.position.y).norm() >
+                    tracker.max_armor_distance_;
+        }),
+        armors_msg.end());
+
+        std::chrono::time_point<std::chrono::system_clock> time = armors_msg[0].timestamp;
+        
+        // Update tracker
+        if (tracker.tracker_->tracker_state == rm_auto_aim::Tracker::LOST) {
+        tracker.tracker_->init(armors_msg);
+        target_msg.tracking = false;
+        }  
+        else {
+            tracker.dt_ = std::chrono::duration_cast<std::chrono::duration<double>>(time - tracker.last_time_).count();
+
+            tracker.tracker_->lost_thres = static_cast<int>(tracker.lost_time_thres_ / tracker.dt_);
+            tracker.tracker_->update(armors_msg);
+
+        
+
+            if (tracker.tracker_->tracker_state == rm_auto_aim::Tracker::DETECTING) 
+            {
+                target_msg.tracking = false;
+                std::cout<<"tracking false"<<std::endl;
+            } 
+            else if (
+            tracker.tracker_->tracker_state == rm_auto_aim::Tracker::TRACKING ||
+            tracker.tracker_->tracker_state == rm_auto_aim::Tracker::TEMP_LOST){
+                target_msg.tracking = true;
+                // Fill target message
+                const auto & state = tracker.tracker_->target_state;
+                target_msg.id = tracker.tracker_->tracked_id;
+                target_msg.armors_num = static_cast<int>(tracker.tracker_->tracked_armors_num);
+                target_msg.position.x = state(0);
+                target_msg.velocity.x = state(1);
+                target_msg.position.y = state(2);
+                target_msg.velocity.y = state(3);
+                target_msg.position.z = state(4);
+                target_msg.velocity.z = state(5);
+                target_msg.yaw = state(6);
+                target_msg.v_yaw = state(7);
+                target_msg.radius_1 = state(8);
+                target_msg.radius_2 = tracker.tracker_->another_r;
+                target_msg.dz = tracker.tracker_->dz;
+            }
+        }
+        
+        tracker.last_time_ = time;
+
+        std::cout<<"target tracking:"<<target_msg.tracking<<std::endl;
+    
+        std::cout<<"target position x:"<<target_msg.position.x<<std::endl;
+        std::cout<<"target position y:"<<target_msg.position.y<<std::endl;
+        std::cout<<"target position z:"<<target_msg.position.z<<std::endl;
+        std::cout<<"target velocity x:"<<target_msg.velocity.x<<std::endl;
+        std::cout<<"target velocity y:"<<target_msg.velocity.y<<std::endl;
+        std::cout<<"target velocity z:"<<target_msg.velocity.z<<std::endl;
+        std::cout<<"target yaw:"<<target_msg.yaw<<std::endl;
+        std::cout<<"target v_yaw:"<<target_msg.v_yaw<<std::endl;
     }
-    else
-    {
-        std::cout<<"Detected armors:"<<std::endl;
+    else{
+        std::cout<<"armors_msg is empty"<<std::endl;
     }
+    }//将两个线程间通信分隔开
+
   
     
 
 
-    
-    }   
-
-        
-        
-
-        // 按下'q'键退出
-        if (cv::waitKey(1) == 'q') {
+    if (cv::waitKey(1) == 'q') {
             capturing = false;
             break;
         }
-    auto end_time = std::chrono::system_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - frameData.timestamp).count();
-    std::cout<<"Total duration:"<<duration<<std::endl;
+      
+
+        
+        
+
+         
+
     }
     
     
@@ -555,8 +643,9 @@ void receiveData()
 int main() {
     // 创建捕捉和处理线程
     std::thread captureThread(videoGet);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
     std::thread receiveThread(receiveData);
-    //std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    //
     std::thread processThread(processFrames);
 
     // 等待线程结束

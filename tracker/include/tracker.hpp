@@ -11,10 +11,11 @@
 // STD
 #include <memory>
 #include <string>
+#include <vector>
+
 
 #include "extended_kalman_filter.hpp"
-#include "auto_aim_interfaces/msg/armors.hpp"
-#include "auto_aim_interfaces/msg/target.hpp"
+#include "../../detector/include/detector.hpp"
 
 namespace rm_auto_aim
 {
@@ -26,12 +27,12 @@ class Tracker
 public:
   Tracker(double max_match_distance, double max_match_yaw_diff);
 
-  using Armors = auto_aim_interfaces::msg::Armors;
-  using Armor = auto_aim_interfaces::msg::Armor;
+  using Armor = rm_auto_aim::Detector::Armormsg;
+  using Armors = std::vector<rm_auto_aim::Detector::Armormsg>;
 
-  void init(const Armors::SharedPtr & armors_msg);
+  void init(const Armors & armors_msg);
 
-  void update(const Armors::SharedPtr & armors_msg);
+  void update(const Armors & armors_msg);
 
   ExtendedKalmanFilter ekf;
 
@@ -66,7 +67,7 @@ private:
 
   void handleArmorJump(const Armor & a);
 
-  double orientationToYaw(const geometry_msgs::msg::Quaternion & q);
+  double orientationToYaw(const  Eigen::Quaterniond & q);
 
   Eigen::Vector3d getArmorPositionFromState(const Eigen::VectorXd & x);
 
