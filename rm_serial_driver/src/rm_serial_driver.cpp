@@ -5,6 +5,7 @@
 
 
 #include "../include/rm_serial_driver.hpp"
+
 #include"yaml-cpp/yaml.h"
 
 // C++ system
@@ -168,7 +169,32 @@ void RMSerialDriver::reopenPort()
     }
 }
 
+void RMSerialDriver::sendData(const rm_auto_aim::Ballistic::firemsg &msg)
+{
+  const static std::map<std::string, uint8_t> id_unit8_map{
+    {"", 0},  {"outpost", 0}, {"1", 1}, {"1", 1},     {"2", 2},
+    {"3", 3}, {"4", 4},       {"5", 5}, {"guard", 6}, {"base", 7}};
 
+  try {
+    SendPacket packet;
+    packet.tracking = msg.tracking;
+    packet.id = id_unit8_map.at(msg.id);
+    packet.pitch = msg.pitch;
+    packet.yaw = msg.yaw;
+
+    crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&packet), sizeof(packet));
+
+    std::vector<uint8_t> data = toVector(packet);
+
+    serial_driver_->port()->send(data);
+    std::cout << "Data sent" << std::endl;  
+
+    
+  } catch (const std::exception &ex) {
+    std::cerr << "Error while sending data: " << ex.what() << std::endl;
+    reopenPort();
+}
+}
 
 
 

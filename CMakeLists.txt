@@ -13,6 +13,7 @@ file(GLOB_RECURSE DETECTOR_FILES
     ${PROJECT_SOURCE_DIR}/detector/src/*.cpp
     ${PROJECT_SOURCE_DIR}/rm_serial_driver/src/*.cpp
     ${PROJECT_SOURCE_DIR}/tracker/src/*.cpp
+    ${PROJECT_SOURCE_DIR}/ballistic_calculation/src/*.cpp
     )
 
 # 包含头文件目录
@@ -20,11 +21,14 @@ include_directories(${PROJECT_SOURCE_DIR}/cameraOpen/include)
 include_directories(${PROJECT_SOURCE_DIR}/detector/include)
 include_directories(${PROJECT_SOURCE_DIR}/rm_serial_driver/include)
 include_directories(${PROJECT_SOURCE_DIR}/tracker/include)
+include_directories(${PROJECT_SOURCE_DIR}/ballistic_calculation/include)
+include_directories(${CERES_INCLUDE_DIRS})
 
 # 查找OpenCV库和yaml-cpp库
 find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(Eigen3 3.3 REQUIRED )
+find_package(Ceres REQUIRED)
 
 # 添加可执行文件
 add_executable(main main.cpp ${DETECTOR_FILES})
@@ -35,6 +39,7 @@ target_link_libraries(main
     ${OpenCV_LIBS}
     yaml-cpp
     Eigen3::Eigen
+    ${CERES_LIBRARIES}
     ${PROJECT_SOURCE_DIR}/cameraOpen/64/libMvCameraControl.so
     ${PROJECT_SOURCE_DIR}/rm_serial_driver/lib/libserial_driver.so
     ${PROJECT_SOURCE_DIR}/rm_serial_driver/lib/libio_context.so

@@ -37,6 +37,10 @@
 #include "rm_serial_driver/include/packet.hpp"
 #include "rm_serial_driver/include/crc.hpp"
 
+//ballistic_calculation
+#include"ballistic_calculation/inlude/ballistic_calculation.hpp"
+
+
 
 //定义一个相机线程和图片处理线程间通信的数据结构，包含帧和时间戳
 struct FrameData {
@@ -318,7 +322,7 @@ std::unique_ptr<rm_auto_aim::Detector> initDetector()
     }
 
 
-int n = 0;
+
 // 线程2：负责处理视频帧
 void processFrames() {
     std::unique_ptr<rm_auto_aim::Detector>detector_ = initDetector();
@@ -349,6 +353,9 @@ void processFrames() {
     //tracker模块得到的目标信息
     rm_auto_aim::ArmorTracker::Target target_msg;
 
+    //创建一个弹道解算类的实例
+    std::unique_ptr<rm_auto_aim::Ballistic> calculator = std::make_unique<rm_auto_aim::Ballistic>();
+
     while (capturing) {
     {
         std::unique_lock<std::mutex> lock(mtx);
@@ -363,16 +370,10 @@ void processFrames() {
         auto transmit_latency = std::chrono::duration_cast<std::chrono::milliseconds>(transmit_time - frameData.timestamp).count();
         std::cout<<"transmit latency:"<<transmit_latency<<std::endl;
 
-        if (frameData.frame->empty()) {
-        std::cout << "Error: Could not load image!" << std::endl;
         
-        }
         cv::imshow("originFrame", *frameData.frame);
 
-        if (cv::getWindowProperty("originFrame", cv::WND_PROP_VISIBLE) < 1) {
-        std::cerr << "Error: Window not created or not visible!" << std::endl;
-        
-        }
+     
         auto startprocesstime = std::chrono::system_clock::now();
 
         auto armors = detector_->detect(*frameData.frame);
@@ -538,28 +539,71 @@ void processFrames() {
                 target_msg.radius_2 = tracker.tracker_->another_r;
                 target_msg.dz = tracker.tracker_->dz;
             }
-        }
-        
-        tracker.last_time_ = time;
 
-        std::cout<<"target tracking:"<<target_msg.tracking<<std::endl;
+            //弹道解算
+            calculator->target_msg = target_msg;
     
-        std::cout<<"target position x:"<<target_msg.position.x<<std::endl;
-        std::cout<<"target position y:"<<target_msg.position.y<<std::endl;
-        std::cout<<"target position z:"<<target_msg.position.z<<std::endl;
-        std::cout<<"target velocity x:"<<target_msg.velocity.x<<std::endl;
-        std::cout<<"target velocity y:"<<target_msg.velocity.y<<std::endl;
-        std::cout<<"target velocity z:"<<target_msg.velocity.z<<std::endl;
-        std::cout<<"target yaw:"<<target_msg.yaw<<std::endl;
-        std::cout<<"target v_yaw:"<<target_msg.v_yaw<<std::endl;
+            //进入第一次大迭代
+            double init_pitch = std::atan(target_msg.position.z / std::sqrt(target_msg.position.x * target_msg.position.x + target_msg.position.y * target_msg.position.y));
+            double init_t = std::sqrt(target_msg.position.x * target_msg.position.x + target_msg.position.y * target_msg.position.y) / (cos(init_pitch) * calculator->bulletV);
+            
+            
+            std::pair<double,double> first_iteration_result = calculator->iteration1(calculator->THRES1 , init_pitch , init_t);
+            
+            //预测并选择合适击打的装甲板
+            double temp_theta = first_iteration_result.first;
+            double temp_t = first_iteration_result.second;
+
+            //预测平衡步兵的最佳装甲板
+            double chosen_yaw;
+            double z;
+            double r;
+
+            if(target_msg.armors_num == 2){
+            std::vector<double>hit_aim = calculator->predictBalanceBestArmor(temp_t);
+                
+            chosen_yaw = hit_aim[0];
+            z = hit_aim[1];
+            r = hit_aim[2];
+            }
+            
+            //else 
+            if (target_msg.armors_num == 4){
+            std::vector<double>hit_aim = calculator->predictInfantryBestArmor(temp_t);
+                
+            chosen_yaw = hit_aim[0];
+            z = hit_aim[1];
+            r = hit_aim[2];
+            }
+            else{
+                std::cerr<<"Error: armors_num is not 2 or 4"<<std::endl;
+            
+            }
+            
+
+            //进入第二次大迭代
+            std::pair<double,double> final_result = calculator->iteration2(calculator->THRES2 , temp_theta , temp_t , chosen_yaw , z , r);
+            
+            
+            //发布消息
+            rm_auto_aim::Ballistic::firemsg fire_msg;
+            fire_msg.pitch = final_result.first;
+            fire_msg.yaw = final_result.second;
+            fire_msg.tracking = target_msg.tracking;
+            fire_msg.id = target_msg.id;
+           //串口发送
+           serialdriver.sendData(fire_msg);
+            }
+                
+                tracker.last_time_ = time;
+
+
+
     }
     else{
         std::cout<<"armors_msg is empty"<<std::endl;
     }
     }//将两个线程间通信分隔开
-
-  
-    
 
 
     if (cv::waitKey(1) == 'q') {
@@ -567,7 +611,7 @@ void processFrames() {
             break;
         }
       
-
+    
         
         
 

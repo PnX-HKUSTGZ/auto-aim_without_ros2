@@ -8,10 +8,11 @@ detector:
     - "negative"
   pkg_path: "/home/pnx/training_code/detector"
   camera_matrix:
-  - [1807.12121, 0.0, 711.11997]
-  - [0.0, 1806.46896, 562.49495]
+  - [1.6568413040244882e+03, 0., 7.1950000000000000e+02]
+  - [0.,1.6568413040244882e+03, 5.3950000000000000e+02]
   - [0.0, 0.0, 1.0]
-  dist_coeff: [-0.078049, 0.158627, 0.000304, -0.000566, 0.000000]
+  dist_coeff: [-2.8380073561710410e-02, -1.1630629792065648e-01, 0., 0.,
+       4.4214145035365970e-01]
 
 serialdriver:
   timestamp_offset: 0.006
@@ -35,6 +36,13 @@ ekf:
   sigma2_q_r: 800.0
   r_xyz_factor: 0.05
   r_yaw: 0.02
+
+ballistic_calcultion:
+  iteration_coeffcient_first: 0.1
+  iteration_coeffcient_second: 0.05
+  air_resistence: 0.1
+  bullet_speed: 24.8
+  
   
 
   

@@ -8,6 +8,7 @@
 
 
 #include <serial_driver/serial_driver.hpp>
+#include"../../ballistic_calculation/inlude/ballistic_calculation.hpp"
 
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -36,6 +37,8 @@ public:
 
   
   void reopenPort();
+
+  void sendData(const rm_auto_aim::Ballistic::firemsg &msg);
 
  
 
