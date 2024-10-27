@@ -21,8 +21,6 @@ public:
 Ballistic(); //构造函数
 
 target target_msg;
-rm_auto_aim::Detector::Point robotcenter = target_msg.position;
-rm_auto_aim::ArmorTracker::Vector3 velocity = target_msg.velocity;
 double bulletV;
 double K1;//第一次大迭代时的步长，需要parameter_declare来调整参数
 double K2;//第一次大迭代时的步长，需要parameter_declare来调整参数
@@ -57,8 +55,8 @@ struct CostFunctor1 {
     template <typename T>
     bool operator()(const T* const t, T* residual) const {
         T v0 = T(ballistic_ref.bulletV); // Set the initial value for v0
-        T futurex = ballistic_ref.robotcenter.x + ballistic_ref.velocity.x * (*t);
-        T futurey = ballistic_ref.robotcenter.y + ballistic_ref.velocity.y * (*t);
+        T futurex = ballistic_ref.target_msg.position.x + ballistic_ref.target_msg.velocity.x * (*t);
+        T futurey = ballistic_ref.target_msg.position.y + ballistic_ref.target_msg.velocity.y * (*t);
         //这里不知道为什么雅可比矩阵会出错，不知道咋回事
         residual[0] = T(1 / ballistic_ref.k)*ceres::log(T(ballistic_ref.k)*ceres::cos(ballistic_ref.theta)*v0 * (*t) + T(1.0)) - T(ceres::sqrt(futurex * futurex + futurey * futurey)) ;
         
