@@ -476,11 +476,12 @@ void processFrames() {
         for (auto & armor : armors_msg) {
             rm_auto_aim::Detector::Pose ps;
             ps = armor.pose;
-            
-            ps.position.x =  + armor.pose.position.x;
+            //将地方装甲板从相机系转至云台系
+            ps.position.x = tracker.gimbal2camra[0] + armor.pose.position.x;
             ps.position.y = tracker.gimbal2camra[1] + armor.pose.position.y;
             ps.position.z = tracker.gimbal2camra[2] + armor.pose.position.z;
             Eigen::Vector3d v(ps.position.x + tracker.gimbal2camra[0], tracker.gimbal2camra[1] + ps.position.y, tracker.gimbal2camra[2] + ps.position.z);
+            //从云台系转至世界系
             Eigen::Vector3d v_rotated = q * v;
             armor.pose.position.x = v_rotated[0];
             armor.pose.position.y = v_rotated[1];
@@ -586,7 +587,7 @@ void processFrames() {
             
             
             //发布消息
-            rm_auto_aim::Ballistic::firemsg fire_msg;
+        rm_auto_aim::Ballistic::firemsg fire_msg;
             fire_msg.pitch = final_result.first;
             fire_msg.yaw = final_result.second;
             fire_msg.tracking = target_msg.tracking;
