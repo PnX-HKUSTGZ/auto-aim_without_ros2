@@ -10,19 +10,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_BUILD_TYPE "Debug")
 
 file(GLOB_RECURSE DETECTOR_FILES 
-    ${PROJECT_SOURCE_DIR}/detector/src/*.cpp
-    ${PROJECT_SOURCE_DIR}/rm_serial_driver/src/*.cpp
-    ${PROJECT_SOURCE_DIR}/tracker/src/*.cpp
-    ${PROJECT_SOURCE_DIR}/ballistic_calculation/src/*.cpp
+    ${PROJECT_SOURCE_DIR}/Frameprocess/*/src/*.cpp
+    ${PROJECT_SOURCE_DIR}/Frameprocess/*.cpp
+    ${PROJECT_SOURCE_DIR}/SerialReceiver/*.cpp
+    ${PROJECT_SOURCE_DIR}/SerialReceiver/rm_serial_driver/src/*.cpp
+    ${PROJECT_SOURCE_DIR}/cameraOpen/*.cpp
     )
 
 # 包含头文件目录
 include_directories(${PROJECT_SOURCE_DIR}/cameraOpen/include)
-include_directories(${PROJECT_SOURCE_DIR}/detector/include)
-include_directories(${PROJECT_SOURCE_DIR}/rm_serial_driver/include)
-include_directories(${PROJECT_SOURCE_DIR}/tracker/include)
-include_directories(${PROJECT_SOURCE_DIR}/ballistic_calculation/include)
-include_directories(${CERES_INCLUDE_DIRS})
+include_directories(${PROJECT_SOURCE_DIR}/Frameprocess/*/include)
+include_directories(${PROJECT_SOURCE_DIR}/Frameprocess/*.hpp)
+include_directories(${PROJECT_SOURCE_DIR}/SerialReceiver/*/include)
+include_directories(${PROJECT_SOURCE_DIR}/SerialReceiver/*.hpp)
 
 # 查找OpenCV库和yaml-cpp库
 find_package(OpenCV REQUIRED)
@@ -41,7 +41,7 @@ target_link_libraries(main
     Eigen3::Eigen
     ${CERES_LIBRARIES}
     ${PROJECT_SOURCE_DIR}/cameraOpen/64/libMvCameraControl.so
-    ${PROJECT_SOURCE_DIR}/rm_serial_driver/lib/libserial_driver.so
-    ${PROJECT_SOURCE_DIR}/rm_serial_driver/lib/libio_context.so
+    ${PROJECT_SOURCE_DIR}/SerialReceiver/rm_serial_driver/lib/libserial_driver.so
+    ${PROJECT_SOURCE_DIR}/SerialReceiver/rm_serial_driver/lib/libio_context.so
 )
 

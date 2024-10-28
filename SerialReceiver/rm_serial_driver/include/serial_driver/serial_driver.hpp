@@ -19,7 +19,7 @@
 #include <string>
 
 #include "io_context/io_context.hpp"
-#include "serial_driver/serial_port.hpp"
+#include "serial_port.hpp"
 
 namespace drivers
 {
