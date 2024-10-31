@@ -2,6 +2,12 @@
 #include <iostream>
 #include <yaml-cpp/yaml.h>
 
+//初始化静态成员变量
+std::queue<Transform> SerialReceiver::transformQueue;
+std::mutex SerialReceiver::mtx2;
+std::condition_variable SerialReceiver::asdf2;
+rm_serial_driver::RMSerialDriver SerialReceiver::serialdriver;
+
 SerialReceiver::SerialReceiver() {}
 
 void SerialReceiver::receiveData() {

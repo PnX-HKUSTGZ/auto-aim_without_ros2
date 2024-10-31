@@ -19,10 +19,18 @@ file(GLOB_RECURSE DETECTOR_FILES
 
 # 包含头文件目录
 include_directories(${PROJECT_SOURCE_DIR}/cameraOpen/include)
-include_directories(${PROJECT_SOURCE_DIR}/Frameprocess/*/include)
-include_directories(${PROJECT_SOURCE_DIR}/Frameprocess/*.hpp)
-include_directories(${PROJECT_SOURCE_DIR}/SerialReceiver/*/include)
-include_directories(${PROJECT_SOURCE_DIR}/SerialReceiver/*.hpp)
+include_directories(${PROJECT_SOURCE_DIR}/Frameprocess)
+include_directories(${PROJECT_SOURCE_DIR}/SerialReceiver)
+include_directories(${PROJECT_SOURCE_DIR}/SerialReceiver/rm_serial_driver/include)
+include_directories(${CERES_INCLUDE_DIRS})
+
+# 递归查找 Frameprocess 目录中的所有 include 目录
+file(GLOB_RECURSE FRAMEPROCESS_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/Frameprocess/*/include)
+
+# 添加这些包含目录
+foreach(DIR ${FRAMEPROCESS_INCLUDE_DIRS})
+    include_directories(${DIR})
+endforeach()
 
 # 查找OpenCV库和yaml-cpp库
 find_package(OpenCV REQUIRED)

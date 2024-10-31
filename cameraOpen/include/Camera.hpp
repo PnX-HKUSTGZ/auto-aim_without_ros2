@@ -21,14 +21,14 @@ public:
     void startCapture();
     void stopCapture();
     static void __stdcall ImageCallBackEx(unsigned char * pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser);
+    static std::mutex mtx;
+    static std::condition_variable asdf;
+    static std::queue<FrameData> frameQueue;
 
 private:
     void* handle;
-    static std::queue<FrameData> frameQueue;
-    static std::mutex mtx;
-    static std::condition_variable asdf;
-    static const size_t MAX_QUEUE_SIZE;
-    static bool capturing;
+    static const size_t MAX_QUEUE_SIZE = 1;
+    
 };
 
 #endif // CAMERA_HPP

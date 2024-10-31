@@ -21,11 +21,13 @@ public:
     SerialReceiver();
     void receiveData();
 
+    static  std::queue<Transform> transformQueue;
+    static std::mutex mtx2;
+    static std::condition_variable asdf2;
+    static rm_serial_driver::RMSerialDriver serialdriver;
+
 private:
-    rm_serial_driver::RMSerialDriver serialdriver;
-    std::queue<Transform> transformQueue;
-    std::mutex mtx2;
-    std::condition_variable asdf2;
+    
     const size_t MAX_QUEUE_SIZE = 1;
 };
 

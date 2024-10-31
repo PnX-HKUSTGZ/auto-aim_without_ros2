@@ -15,7 +15,7 @@
 #include "ballistic_calculation/inlude/ballistic_calculation.hpp"
 #include "../cameraOpen/include/Camera.hpp"
 
-#include"SerialReceiver/SerialReceiver.hpp"
+#include"../SerialReceiver/SerialReceiver.hpp"
 
 class FrameProcessor {
 public:
@@ -23,16 +23,14 @@ public:
     void processFrames();
     std::unique_ptr<rm_auto_aim::Detector> initDetector();
 
+
 private:
     
     std::unique_ptr<rm_auto_aim::Detector> detector_;
     std::unique_ptr<rm_auto_aim::PnPSolver> pnp_solver_;
-    std::unique_ptr<rm_auto_aim::Ballistic> calculator_;
+    std::unique_ptr<rm_auto_aim::Ballistic> calculator;
     rm_auto_aim::ArmorTracker tracker;
-    std::queue<FrameData> frameQueue;
-    std::mutex mtx;
-    std::condition_variable asdf;
-    bool capturing;
+    bool capturing = true;
 
     rm_auto_aim::Detector::Armormsg armor_msg;
     std::vector<rm_auto_aim::Detector::Armormsg>armors_msg;//与tracker模块（目标跟踪与状态估计）交互的数据结构

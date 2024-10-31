@@ -21,7 +21,7 @@ FrameProcessor::FrameProcessor() : capturing(true) {
     }
 
     pnp_solver_ = std::make_unique<rm_auto_aim::PnPSolver>(camera_matrix_data, dist_coeffs_data);
-    calculator_ = std::make_unique<rm_auto_aim::Ballistic>();
+    calculator = std::make_unique<rm_auto_aim::Ballistic>();
 }
 
 std::unique_ptr<rm_auto_aim::Detector> FrameProcessor::initDetector() {
@@ -59,14 +59,14 @@ std::unique_ptr<rm_auto_aim::Detector> FrameProcessor::initDetector() {
 void FrameProcessor::processFrames() {
     while (capturing) {
     {
-        std::unique_lock<std::mutex> lock(mtx);
-        asdf.wait(lock, [this] { return !frameQueue.empty(); });  // 等待捕捉线程的通知
+        std::unique_lock<std::mutex> lock(Camera::mtx);
+        Camera::asdf.wait(lock, [this] { return !Camera::frameQueue.empty(); });  // 等待捕捉线程的通知
 
         // 从队列中取出一帧进行处理
-        FrameData frameData = frameQueue.front();
-        frameQueue.pop();
+        FrameData frameData = Camera::frameQueue.front();
+        Camera::frameQueue.pop();
         lock.unlock();
-        asdf.notify_one();
+        Camera::asdf.notify_one();
         auto transmit_time = std::chrono::system_clock::now();
         auto transmit_latency = std::chrono::duration_cast<std::chrono::milliseconds>(transmit_time - frameData.timestamp).count();
         std::cout<<"transmit latency:"<<transmit_latency<<std::endl;
@@ -158,14 +158,14 @@ void FrameProcessor::processFrames() {
 
     {
     //从串口获取云台位姿（线程间通信）
-    std::unique_lock<std::mutex> lock(mtx2);
-    asdf2.wait(lock, [this] { return !transformQueue.empty(); });  // 等待捕捉线程的通知
+    std::unique_lock<std::mutex> lock(SerialReceiver::mtx2);
+    SerialReceiver::asdf2.wait(lock, [this] { return !SerialReceiver::transformQueue.empty(); });  // 等待捕捉线程的通知
     
     // 从队列中取出一帧进行处理
-    transform t = transformQueue.front();
-    transformQueue.pop();
+    Transform t = SerialReceiver::transformQueue.front();
+    SerialReceiver::transformQueue.pop();
     lock.unlock();
-    asdf2.notify_one();
+    SerialReceiver::asdf2.notify_one();
     
 
     if(!armors_msg.empty()){
@@ -194,10 +194,10 @@ void FrameProcessor::processFrames() {
         armors_msg.erase(
         std::remove_if(
         armors_msg.begin(), armors_msg.end(),
-        [&tracker](const rm_auto_aim::Detector::Armormsg & armor) {
+        [this](const rm_auto_aim::Detector::Armormsg & armor) {
             return abs(armor.pose.position.z) > 1.2 ||
                 Eigen::Vector2d(armor.pose.position.x, armor.pose.position.y).norm() >
-                    tracker.max_armor_distance_;
+                    this->tracker.max_armor_distance_;
         }),
         armors_msg.end());
 
@@ -256,11 +256,12 @@ void FrameProcessor::processFrames() {
             double temp_theta = first_iteration_result.first;
             double temp_t = first_iteration_result.second;
 
-            //预测平衡步兵的最佳装甲板
+            
             double chosen_yaw;
             double z;
             double r;
-
+            
+            //预测平衡步兵的最佳装甲板
             if(target_msg.armors_num == 2){
             std::vector<double>hit_aim = calculator->predictBalanceBestArmor(temp_t);
                 
@@ -294,7 +295,7 @@ void FrameProcessor::processFrames() {
             fire_msg.tracking = target_msg.tracking;
             fire_msg.id = target_msg.id;
            //串口发送
-           serialdriver.sendData(fire_msg);
+           SerialReceiver::serialdriver.sendData(fire_msg);
             }
                 
                 tracker.last_time_ = time;

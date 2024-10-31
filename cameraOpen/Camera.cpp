@@ -1,11 +1,10 @@
 #include "include/Camera.hpp"
 #include <iostream>
 
-std::queue<FrameData> Camera::frameQueue;
+//静态成员变量初始化
 std::mutex Camera::mtx;
 std::condition_variable Camera::asdf;
-const size_t Camera::MAX_QUEUE_SIZE = 1;
-bool Camera::capturing = true;
+std::queue<FrameData> Camera::frameQueue;
 
 Camera::Camera() : handle(nullptr) {}
 
@@ -86,6 +85,7 @@ void Camera::stopCapture() {
     MV_CC_Finalize();
 }
 
+//利用回调函数将图像放入队列，传输给处理线程
 void __stdcall Camera::ImageCallBackEx(unsigned char * pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser) {
     if (pFrameInfo) {
         cv::Mat mat(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);

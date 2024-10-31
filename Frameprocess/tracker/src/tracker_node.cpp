@@ -4,7 +4,6 @@
 // STD
 #include <memory>
 #include <vector>
-#include "detector.hpp"
 #include"yaml-cpp/yaml.h"
 
 namespace rm_auto_aim
